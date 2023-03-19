@@ -11,8 +11,8 @@ Desenvolvendo um controle para o Spotify.
 
 ### Ideia
 
-A ideia central do projeto é controlar (softwares/aplicações) por meio de processamento de imagem, áudio e membrana de botões.
-Então por meio de movimentos será possível identificar com gestos ou por meio de comando de voz a realização de uma tarefa.
+A ideia central do projeto é controlar uma plataforma de música por meio de processamento de imagem, áudio e membrana de botões.
+Então através de movimentos será possível identificar com gestos ou por meio de comando de voz a realização de uma tarefa.
 
 ### Nome
 
@@ -59,24 +59,34 @@ Finalmente, o usuário decide parar de usar o controle e desliga a caixa de som 
 
 Comandos de gestos:
 Mostrar o dedo para a esquerda ou direita para mudar de música.
+
 Fazer um movimento para pausar ou retomar a reprodução de música.
-Comando de voz para mudar a música
+
+Comando de voz para mudar a música.
+
 Comando de voz para pausar.
+
 Feedbacks visuais na própria plataforma indicando que houve pausa ou mudou de música.
+
 Led mostra que a musica passou ou voltou, ou pause/play na música. 
+
 
 
 ## In/OUT (3 pts)
 
-Reconhecer gestos, comandos de avançar ou voltar, pause/ play : Camêra OpenMV M7
-Comando de voz : Sensor de áudio LMV324
-Volume da música: Matriz de botões
-Trocou música : LED1
-Pause / Play : LED2
+Reconhecer gestos, comandos de avançar ou voltar, pause/ play : Camêra OpenMV M7.
+
+Comando de voz : Sensor de áudio LMV324.
+
+Volume da música: Matriz de botões.
+
+Trocou música : LED1.
+
+Pause / Play : LED2.
 
 ### Design (2 pts)
 
-![arkad] arkad.png
+![alt tag](arkad.png)
 
 
 
