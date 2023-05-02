@@ -40,6 +40,12 @@
 #define CAMN_PIO_IDX  4
 #define CAMN_IDX_MASK (1 << CAMN_PIO_IDX)
 
+// CAM BACK
+#define CAMB_PIO      PIOA
+#define CAMB_PIO_ID   ID_PIOA
+#define CAMB_PIO_IDX  2
+#define CAMB_IDX_MASK (1 << CAMB_PIO_IDX)
+
 
 /** RTOS  */
 #define TASK_OLED_STACK_SIZE                (1024*6/sizeof(portSTACK_TYPE))
@@ -58,6 +64,9 @@ extern void xPortSysTickHandler(void);
 void but_callback(void);
 static void BUT_init(void);
 void io_init(void);
+static void camp_callback(void);
+static void camn_callback(void);
+static void camb_callback(void);
 
 /************************************************************************/
 /* RTOS application funcs                                               */
@@ -80,6 +89,8 @@ SemaphoreHandle_t xSemaphoreCamp;
 
 SemaphoreHandle_t xSemaphoreCamn;
 
+SemaphoreHandle_t xSemaphoreCamb;
+
 /************************************************************************/
 /* handlers / callbacks                                                 */
 /************************************************************************/
@@ -94,6 +105,12 @@ static void camn_callback(void) {
 	printf("Entrei no callback camn");
 	BaseType_t xHigherPriorityTaskWoken = pdTRUE;
 	xSemaphoreGiveFromISR(xSemaphoreCamn, &xHigherPriorityTaskWoken);
+}
+
+static void camb_callback(void) {
+	printf("Entrei no callback camb");
+	BaseType_t xHigherPriorityTaskWoken = pdTRUE;
+	xSemaphoreGiveFromISR(xSemaphoreCamb, &xHigherPriorityTaskWoken);
 }
 
 /************************************************************************/
@@ -241,11 +258,15 @@ void task_bluetooth(void) {
   while(1) {
     // atualiza valor do botão
     if(pio_get(BUT_PIO, PIO_INPUT, BUT_IDX_MASK) == 0) {
-      button1 = '1';
+        button1 = '1';
       } else if (!pio_get(CAMP_PIO, PIO_INPUT, CAMP_IDX_MASK)){
 		button1 = '2';
+	  } else if (!pio_get(CAMN_PIO, PIO_INPUT, CAMN_IDX_MASK)){
+		button1 = '3';
+	  } else if (!pio_get(CAMB_PIO, PIO_INPUT, CAMB_IDX_MASK)){
+		button1 = '4';
 	  } else {
-      button1 = '0';
+        button1 = '0';
     }
 
 	
@@ -265,7 +286,7 @@ void task_bluetooth(void) {
 	
 
     // dorme por 500 ms
-    vTaskDelay(250 / portTICK_PERIOD_MS);
+    vTaskDelay(125 / portTICK_PERIOD_MS);
   }
 }
 
@@ -276,6 +297,7 @@ void task_bluetooth(void) {
 void init_pins(void){
 	pmc_enable_periph_clk(CAMP_PIO_ID);
 	pmc_enable_periph_clk(CAMN_PIO_ID);
+	pmc_enable_periph_clk(CAMB_PIO_ID);
 
 	pio_configure(CAMP_PIO, PIO_INPUT, CAMP_IDX_MASK, PIO_PULLUP | PIO_DEBOUNCE);
 	pio_set_debounce_filter(CAMP_PIO, CAMP_IDX_MASK, 60);
@@ -309,30 +331,51 @@ void init_pins(void){
 	NVIC_EnableIRQ(CAMN_PIO_ID);
 	NVIC_SetPriority(CAMN_PIO_ID, 4); // Prioridade 4
 	
+	//-----------------------------------------
+	/*
+	pio_configure(CAMB_PIO, PIO_INPUT, CAMB_IDX_MASK, PIO_PULLUP | PIO_DEBOUNCE);
+	pio_set_debounce_filter(CAMB_PIO, CAMB_IDX_MASK, 60);
+	pio_handler_set(CAMB_PIO,
+					CAMB_PIO_ID,
+					CAMB_IDX_MASK,
+					PIO_IT_EDGE,
+					camb_callback);
+	
+	pio_enable_interrupt(CAMB_PIO, CAMB_IDX_MASK);
+	pio_get_interrupt_status(CAMB_PIO);
+	
+	NVIC_EnableIRQ(CAMB_PIO_ID);
+	NVIC_SetPriority(CAMB_PIO_ID, 4); // Prioridade 4
+	*/
+	
+	
 	
 }
 
 
 int main(void) {
 	/* Initialize the SAM system */
+	printf("oi");
 	sysclk_init();
 	board_init();
 	init_pins();
 
-	/* Initialize the console uart */
 	configure_console();
-	
-	/* Attempt to create a semaphore. */
+
+	/*
 	xSemaphoreCamp = xSemaphoreCreateBinary();
 	if (xSemaphoreCamp == NULL)
 		printf("falha em criar o semaforo \n");
 	
-	/* Attempt to create a semaphore. */
 	xSemaphoreCamn = xSemaphoreCreateBinary();
 	if (xSemaphoreCamn == NULL)
 		printf("falha em criar o semaforo \n");
+		
+	xSemaphoreCamb = xSemaphoreCreateBinary();
+	if (xSemaphoreCamb == NULL)
+	printf("falha em criar o semaforo \n");
 
-	/* Create task to control oled */
+	*/
 	if (xTaskCreate(task_oled, "oled", TASK_OLED_STACK_SIZE, NULL, TASK_OLED_STACK_PRIORITY, NULL) != pdPASS) {
 	  printf("Failed to create oled task\r\n");
 	}

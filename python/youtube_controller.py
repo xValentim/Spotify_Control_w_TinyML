@@ -56,6 +56,7 @@ class DummyControllerInterface:
 
 if __name__ == '__main__':
     interfaces = ['dummy', 'serial']
+    print("oi, sou eu")
     argparse = argparse.ArgumentParser()
     argparse.add_argument('serial_port', type=str)
     argparse.add_argument('-b', '--baudrate', type=int, default=115200)
