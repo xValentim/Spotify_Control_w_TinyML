@@ -13,7 +13,14 @@
 /* defines                                                              */
 /************************************************************************/
 
-// LEDs
+ 
+#define PIO_PA2A_URXD0  2
+#define PIO_PA2A_URXD0_MASK (1 << PIO_PA2A_URXD0)
+
+#define PIO_PA24A_UTXD0 24
+#define PIO_PA24A_UTXD0_MASK (1 << PIO_PA24A_UTXD0)
+
+ 
 #define LED_PIO      PIOC
 #define LED_PIO_ID   ID_PIOC
 #define LED_IDX      8
@@ -25,11 +32,31 @@
 #define BUT_IDX      11
 #define BUT_IDX_MASK (1 << BUT_IDX)
 
+
+//BACK
+#define BUT_1_PIO			PIOD
+#define BUT_1_PIO_ID		ID_PIOD
+#define BUT_1_PIO_IDX		28
+#define BUT_1_PIO_IDX_MASK (1u << BUT_1_PIO_IDX) 
+
+//PAUSE
+#define BUT_2_PIO			PIOC
+#define BUT_2_PIO_ID		ID_PIOC
+#define BUT_2_PIO_IDX		31
+#define BUT_2_PIO_IDX_MASK (1u << BUT_2_PIO_IDX) 
+
+// NEXT
+#define BUT_3_PIO			PIOA
+#define BUT_3_PIO_ID		ID_PIOA
+#define BUT_3_PIO_IDX		19
+#define BUT_3_PIO_IDX_MASK (1u << BUT_3_PIO_IDX) 
+
+
 // usart (bluetooth ou serial)
 // Descomente para enviar dados
 // pela serial debug
 
-#define DEBUG_SERIAL
+//#define DEBUG_SERIAL
 
 #ifdef DEBUG_SERIAL
 #define USART_COM USART1
@@ -112,10 +139,17 @@ void io_init(void) {
 	// Ativa PIOs
 	pmc_enable_periph_clk(LED_PIO_ID);
 	pmc_enable_periph_clk(BUT_PIO_ID);
+	
+	pmc_enable_periph_clk(BUT_1_PIO_ID);
+	pmc_enable_periph_clk(BUT_2_PIO_ID);
+	pmc_enable_periph_clk(BUT_3_PIO_ID);
 
 	// Configura Pinos
 	pio_configure(LED_PIO, PIO_OUTPUT_0, LED_IDX_MASK, PIO_DEFAULT | PIO_DEBOUNCE);
 	pio_configure(BUT_PIO, PIO_INPUT, BUT_IDX_MASK, PIO_PULLUP);
+	pio_configure(BUT_1_PIO, PIO_INPUT, BUT_1_PIO_IDX_MASK, PIO_PULLUP);
+	pio_configure(BUT_2_PIO, PIO_INPUT, BUT_2_PIO_IDX_MASK, PIO_PULLUP);
+	pio_configure(BUT_3_PIO, PIO_INPUT, BUT_3_PIO_IDX_MASK, PIO_PULLUP);
 }
 
 static void configure_console(void) {
@@ -190,9 +224,10 @@ void config_usart0(void) {
 	usart_enable_tx(USART0);
 	usart_enable_rx(USART0);
 
-	// RX - PB0  TX - PB1
-	pio_configure(PIOB, PIO_PERIPH_C, (1 << 0), PIO_DEFAULT);
-	pio_configure(PIOB, PIO_PERIPH_C, (1 << 1), PIO_DEFAULT);
+	 // RX - PA2  TX - PA24
+	 
+	 pio_configure(PIOA, PIO_PERIPH_A, PIO_PA2A_URXD0_MASK, PIO_DEFAULT);
+	 pio_configure(PIOA, PIO_PERIPH_A, PIO_PA24A_UTXD0_MASK, PIO_DEFAULT);
 }
 
 int hc05_init(void) {
@@ -222,23 +257,65 @@ void task_bluetooth(void) {
 	// configura LEDs e Botões
 	io_init();
 
-	char button1 = '0';
+	char buttonA = '0';
+	char buttonB = '2';
+	char buttonC = '4';
 	char eof = 'X';
 
 	// Task não deve retornar.
 	while(1) {
-		// atualiza valor do botão
-		if(pio_get(BUT_PIO, PIO_INPUT, BUT_IDX_MASK) == 0) {
-			button1 = '1';
-		} else {
-			button1 = '0';
+		// botao A
+		if(pio_get(BUT_1_PIO, PIO_INPUT, BUT_1_PIO_IDX_MASK) == 0) {
+			buttonA = '1';
+		} 
+		else {
+			buttonA = '0';
 		}
 
 		// envia status botão
 		while(!usart_is_tx_ready(USART_COM)) {
 			vTaskDelay(10 / portTICK_PERIOD_MS);
 		}
-		usart_write(USART_COM, button1);
+		usart_write(USART_COM, buttonA);
+		
+		// envia fim de pacote
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, eof);
+		
+		// botao B
+		if(pio_get(BUT_2_PIO, PIO_INPUT, BUT_2_PIO_IDX_MASK) == 0) {
+			buttonB = '3';
+		}
+		else {
+			buttonB = '2';
+		}
+
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, buttonB);
+	
+		// envia fim de pacote
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, eof);
+		
+		
+		// botao C
+		if(pio_get(BUT_3_PIO, PIO_INPUT, BUT_3_PIO_IDX_MASK) == 0) {
+			buttonC = '5';
+		}
+		else {
+			buttonC = '4';
+		}
+
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, buttonC);
 		
 		// envia fim de pacote
 		while(!usart_is_tx_ready(USART_COM)) {
