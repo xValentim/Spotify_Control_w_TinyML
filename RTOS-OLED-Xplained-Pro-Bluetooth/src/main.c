@@ -6,7 +6,16 @@
 #include "gfx_mono_text.h"
 #include "sysfont.h"
 
-#define DEBUG_SERIAL
+
+
+#define PIO_PA2A_URXD0  2
+#define PIO_PA2A_URXD0_MASK (1 << PIO_PA2A_URXD0)
+
+#define PIO_PA24A_UTXD0 24
+#define PIO_PA24A_UTXD0_MASK (1 << PIO_PA24A_UTXD0)
+
+
+//#define DEBUG_SERIAL
 
 #ifdef DEBUG_SERIAL
 #define USART_COM USART1
@@ -41,6 +50,25 @@
 #define CAMN_IDX_MASK (1 << CAMN_PIO_IDX)
 
 
+
+//BACK
+#define BUT_1_PIO			PIOD
+#define BUT_1_PIO_ID		ID_PIOD
+#define BUT_1_PIO_IDX		28
+#define BUT_1_PIO_IDX_MASK (1u << BUT_1_PIO_IDX)
+
+//PAUSE
+#define BUT_2_PIO			PIOC
+#define BUT_2_PIO_ID		ID_PIOC
+#define BUT_2_PIO_IDX		31
+#define BUT_2_PIO_IDX_MASK (1u << BUT_2_PIO_IDX)
+
+// NEXT
+#define BUT_3_PIO			PIOA
+#define BUT_3_PIO_ID		ID_PIOA
+#define BUT_3_PIO_IDX		19
+#define BUT_3_PIO_IDX_MASK (1u << BUT_3_PIO_IDX)
+
 /** RTOS  */
 #define TASK_OLED_STACK_SIZE                (1024*6/sizeof(portSTACK_TYPE))
 #define TASK_OLED_STACK_PRIORITY            (tskIDLE_PRIORITY)
@@ -58,7 +86,8 @@ extern void xPortSysTickHandler(void);
 void but_callback(void);
 static void BUT_init(void);
 void io_init(void);
-
+void LED_init(int estado);
+void pin_toggle(Pio *pio, uint32_t mask);
 /************************************************************************/
 /* RTOS application funcs                                               */
 /************************************************************************/
@@ -115,15 +144,23 @@ static void configure_console(void) {
 	setbuf(stdout, NULL);
 }
 
+
 void io_init(void) {
 
-  // Ativa PIOs
-  pmc_enable_periph_clk(LED_PIO_ID);
-  pmc_enable_periph_clk(BUT_PIO_ID);
+	// Ativa PIOs
+	pmc_enable_periph_clk(LED_PIO_ID);
+	pmc_enable_periph_clk(BUT_PIO_ID);
+	
+	pmc_enable_periph_clk(BUT_1_PIO_ID);
+	pmc_enable_periph_clk(BUT_2_PIO_ID);
+	pmc_enable_periph_clk(BUT_3_PIO_ID);
 
-  // Configura Pinos
-  pio_configure(LED_PIO, PIO_OUTPUT_0, LED_IDX_MASK, PIO_DEFAULT | PIO_DEBOUNCE);
-  pio_configure(BUT_PIO, PIO_INPUT, BUT_IDX_MASK, PIO_PULLUP);
+	// Configura Pinos
+	pio_configure(LED_PIO, PIO_OUTPUT_0, LED_IDX_MASK, PIO_DEFAULT | PIO_DEBOUNCE);
+	pio_configure(BUT_PIO, PIO_INPUT, BUT_IDX_MASK, PIO_PULLUP);
+	pio_configure(BUT_1_PIO, PIO_INPUT, BUT_1_PIO_IDX_MASK, PIO_PULLUP);
+	pio_configure(BUT_2_PIO, PIO_INPUT, BUT_2_PIO_IDX_MASK, PIO_PULLUP);
+	pio_configure(BUT_3_PIO, PIO_INPUT, BUT_3_PIO_IDX_MASK, PIO_PULLUP);
 }
 
 uint32_t usart_puts(uint8_t *pstring) {
@@ -176,6 +213,8 @@ void config_usart0(void) {
   // RX - PB0  TX - PB1
   pio_configure(PIOB, PIO_PERIPH_C, (1 << 0), PIO_DEFAULT);
   pio_configure(PIOB, PIO_PERIPH_C, (1 << 1), PIO_DEFAULT);
+  
+  
 }
 
 int hc05_init(void) {
@@ -196,11 +235,23 @@ int hc05_init(void) {
 /* TASKS                                                                */
 /************************************************************************/
 
+void LED_init(int estado) {
+	pmc_enable_periph_clk(LED_PIO_ID);
+	pio_set_output(LED_PIO, LED_IDX_MASK, estado, 0, 0);
+};
+
+void pin_toggle(Pio *pio, uint32_t mask) {
+	if(pio_get_output_data_status(pio, mask))
+	pio_clear(pio, mask);
+	else
+	pio_set(pio,mask);
+}
+
+
 static void task_oled(void *pvParameters) {
   gfx_mono_ssd1306_init();
   gfx_mono_draw_string("Exemplo RTOS", 0, 0, &sysfont);
   gfx_mono_draw_string("oii", 0, 20, &sysfont);
-
   for (;;)  {
 
 	 /*
@@ -224,49 +275,100 @@ static void task_oled(void *pvParameters) {
 }
 
 void task_bluetooth(void) {
-  printf("Task Bluetooth started \n");
-  printf("Inicializando HC05 \n");
-  #ifndef DEBUG_SERIAL
-  config_usart0();
-  #endif
-  hc05_init();
+	#ifndef DEBUG_SERIAL
+	config_usart0();
+	#endif
+	hc05_init();
 
-  // configura LEDs e Botões
-  io_init();
+	// Handshake
+	//Send Hello and check OK
+	char rx = 'R';
+	while (rx != 'O') {
+		while(!usart_is_tx_ready(USART_COM))
+		vTaskDelay(10 / portTICK_PERIOD_MS);
+		usart_write(USART_COM, 'H');
+		while(!usart_is_rx_ready(USART_COM))
+		vTaskDelay(10 / portTICK_PERIOD_MS);
+		usart_read(USART_COM, &rx);
+	}
+	// Send Start
+	while(!usart_is_tx_ready(USART_COM))
+	vTaskDelay(10 / portTICK_PERIOD_MS);
+	usart_write(USART_COM, 'S');
 
-  char button1 = '0';
-  char eof = 'X';
 
-  // Task não deve retornar.
-  while(1) {
-    // atualiza valor do botão
-    if(pio_get(BUT_PIO, PIO_INPUT, BUT_IDX_MASK) == 0) {
-      button1 = '1';
-      } else if (!pio_get(CAMP_PIO, PIO_INPUT, CAMP_IDX_MASK)){
-		button1 = '2';
-	  } else {
-      button1 = '0';
-    }
-
+	char buttonA = '0';
+	char buttonB = '2';
+	char buttonC = '4';
+	char eof = 'X';
 	
-	
+	// Task não deve retornar.
+	while(1) {
+		// botao A
+		if(pio_get(BUT_1_PIO, PIO_INPUT, BUT_1_PIO_IDX_MASK) == 0) {
+			buttonA = '1';
 
-    // envia status botão
-    while(!usart_is_tx_ready(USART_COM)) {
-      vTaskDelay(10 / portTICK_PERIOD_MS);
-    }
-    usart_write(USART_COM, button1);
-    
-    // envia fim de pacote
-    while(!usart_is_tx_ready(USART_COM)) {
-      vTaskDelay(10 / portTICK_PERIOD_MS);
-    }
-    usart_write(USART_COM, eof);
-	
+		}
+		else {
+			buttonA = '0';
+		}
 
-    // dorme por 500 ms
-    vTaskDelay(250 / portTICK_PERIOD_MS);
-  }
+		// envia status botão
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, buttonA);
+		
+		// envia fim de pacote
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, eof);
+		
+		// botao B
+		if(pio_get(BUT_2_PIO, PIO_INPUT, BUT_2_PIO_IDX_MASK) == 0) {
+			buttonB = '3';
+			
+		}
+		else {
+			buttonB = '2';
+		}
+
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, buttonB);
+		
+		// envia fim de pacote
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, eof);
+		
+		
+		// botao C
+		if(pio_get(BUT_3_PIO, PIO_INPUT, BUT_3_PIO_IDX_MASK) == 0) {
+			buttonC = '5';
+			pin_toggle(LED_PIO, LED_IDX_MASK);
+		}
+		else {
+			buttonC = '4';
+		}
+
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, buttonC);
+		
+		// envia fim de pacote
+		while(!usart_is_tx_ready(USART_COM)) {
+			vTaskDelay(10 / portTICK_PERIOD_MS);
+		}
+		usart_write(USART_COM, eof);
+
+		// dorme por 500 ms
+		vTaskDelay(500 / portTICK_PERIOD_MS);
+	}
 }
 
 /************************************************************************/
@@ -318,7 +420,8 @@ int main(void) {
 	sysclk_init();
 	board_init();
 	init_pins();
-
+	// configura LEDs e Botões
+	io_init();
 	/* Initialize the console uart */
 	configure_console();
 	
