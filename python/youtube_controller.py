@@ -3,6 +3,13 @@ import serial
 import argparse
 import time
 import logging
+import numpy as np
+from scipy.io.wavfile import write
+
+
+TS = 16000
+START_CHAR = 'A'
+END_CHAR = 'X'
 
 class MyControllerMap:
     def __init__(self):
@@ -19,15 +26,24 @@ class SerialControllerInterface:
         self.incoming = '0'
         pyautogui.PAUSE = 0  ## remove delay
     
+    def convert(self, data):
+
+        audio = np.array(data, dtype=np.int16)
+
+        write('output.wav', TS, audio)
+    
     def update(self):
         ## Sync protocol
         print("update")
-        while self.incoming != b'X':
-            print('travei')
+        while self.incoming != b'A' and self.incoming != b'X':
+            # print('travei')
             self.incoming = self.ser.read()
+
             logging.debug("Received INCOMING: {}".format(self.incoming))
-        #print('nao chego aqui')
+        print('nao chego aqui')
         data = self.ser.read()
+        # data = self.incoming
+        print(data, self.incoming)
         logging.debug("Received DATA: {}".format(data))
 
         #BACK
@@ -58,6 +74,20 @@ class SerialControllerInterface:
             print('data4')
             logging.info("KEYUP C")
             pyautogui.keyUp(self.mapping.button['C'])
+            
+        # Audio Recieve
+        elif self.incoming == b'A':
+            print('data start')
+            audio = list()
+            data = self.ser.readline().decode('ASCII').replace('\n', '')
+            while (data != END_CHAR):
+                if data != '':
+                    audio.append(data)
+                data = self.ser.readline().decode('ASCII').replace('\n', '')
+            
+            print(f'Received {len(audio)} entries')
+            self.convert(audio)
+
 
         self.incoming = self.ser.read()
 
