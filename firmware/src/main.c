@@ -161,7 +161,8 @@ extern void vApplicationMallocFailedHook(void) {
 	configASSERT( ( volatile void * ) NULL );
 }
 volatile int volume;
-int volatile old_volume = 0;
+int volatile integrate_volume = 1;
+int volatile old_volume = 1;
 SemaphoreHandle_t xSemaphoreNext;
 SemaphoreHandle_t xSemaphoreBack;
 SemaphoreHandle_t xSemaphorePause;
@@ -171,13 +172,15 @@ SemaphoreHandle_t xSemaphoreVolume;
 /** Queue for msg log send data */
 QueueHandle_t xQueueADC;
 
+QueueHandle_t xQueueGeneral;
+
 /************************************************************************/
 /* handlers / callbacks                                                 */
 /************************************************************************/
 
-
+int volatile flag_sleep = 0;
 void but_callback(void){
-	int i = 1;
+	flag_sleep = !flag_sleep;
 }
 
 static void next_callback(void) {
@@ -193,20 +196,6 @@ static void back_callback(void) {
 static void pause_callback(void) {
 	BaseType_t xHigherPriorityTaskWoken = pdTRUE;
 	xSemaphoreGiveFromISR(xSemaphorePause, &xHigherPriorityTaskWoken);
-}
-
-void TC0_Handler(void){    
-	volatile uint32_t ul_dummy;
-
-	/****************************************************************
-	* Devemos indicar ao TC que a interrupção foi satisfeita.
-	******************************************************************/
-	ul_dummy = tc_get_status(TC0, 0);
-	printf("[Debug] TC0 IRQ \n");
-
-	/* Avoid compiler warning */
-	UNUSED(ul_dummy);
-
 }
 
 
@@ -261,15 +250,14 @@ static void AFEC_pot_callback(void) {
 	else if(value < 4096){
 		volume = 16;
 	}
-	
 	delta_volume = (volume - old_volume) + 16;
-	
+	integrate_volume += delta_volume - 16;
 	if (delta_volume != 16){
 		
-		old_volume = volume;
 		BaseType_t xHigherPriorityTaskWoken = pdTRUE;
 		xQueueSendFromISR(xQueueADC, &delta_volume, &xHigherPriorityTaskWoken);
 	}
+	old_volume = volume;
 }
 
 
@@ -481,10 +469,9 @@ void config_usart0(void) {
 	usart_enable_tx(USART0);
 	usart_enable_rx(USART0);
 
-	 // RX - PA2  TX - PA24
-	 
-	 pio_configure(PIOA, PIO_PERIPH_A, PIO_PA2A_URXD0_MASK, PIO_DEFAULT);
-	 pio_configure(PIOA, PIO_PERIPH_A, PIO_PA24A_UTXD0_MASK, PIO_DEFAULT);
+	 // RX - PB0  TX - PB1
+	 pio_configure(PIOB, PIO_PERIPH_C, (1 << 0), PIO_DEFAULT);
+	 pio_configure(PIOB, PIO_PERIPH_C, (1 << 1), PIO_DEFAULT);
 }
 
 int hc05_init(void) {
@@ -493,7 +480,7 @@ int hc05_init(void) {
 	vTaskDelay( 500 / portTICK_PERIOD_MS);
 	usart_send_command(USART_COM, buffer_rx, 1000, "AT", 100);
 	vTaskDelay( 500 / portTICK_PERIOD_MS);
-	usart_send_command(USART_COM, buffer_rx, 1000, "AT+NAMEagoravai", 100);
+	usart_send_command(USART_COM, buffer_rx, 1000, "AT+NAMEaipaipara", 100);
 	vTaskDelay( 500 / portTICK_PERIOD_MS);
 	usart_send_command(USART_COM, buffer_rx, 1000, "AT", 100);
 	vTaskDelay( 500 / portTICK_PERIOD_MS);
@@ -508,6 +495,64 @@ void vTimerCallback(TimerHandle_t xTimer) {
 	/* Selecina canal e inicializa conversão */
 	afec_channel_enable(AFEC_POT, AFEC_POT_CHANNEL);
 	afec_start_software_conversion(AFEC_POT);
+}
+
+void pin_toggle(Pio *pio, uint32_t mask) {
+	if(pio_get_output_data_status(pio, mask))
+	pio_clear(pio, mask);
+	else
+	pio_set(pio,mask);
+}
+
+// static void task_feedback(void *pvParameters){
+// 	
+// 	
+// 	
+// 	while(1){
+// 		char rx;
+// 		while(!usart_is_rx_ready(USART_COM))
+// 		vTaskDelay(10 / portTICK_PERIOD_MS);
+// // 		usart_read(USART_COM, &rx);
+// 		if (rx == 'K'){
+// 			pin_toggle(LED_PIO, LED_IDX_MASK);
+// 			vTaskDelay(100);
+// 			pin_toggle(LED_PIO, LED_IDX_MASK);
+// 			vTaskDelay(100);
+// 		}
+// 	}
+// }
+
+
+
+static void task_general(void *pvParameters){
+	
+	int msg;
+	char to_send = '0';
+	char eof = 'X';
+	while (1){
+		if (xQueueReceive(xQueueGeneral, &(msg), 10)) {
+			
+			if (msg == 1){
+				to_send = '1';
+			} else if (msg == 3){
+				to_send = '3'; 
+			} else if (msg == 5){
+				to_send = '5';
+			}
+			
+			
+			while(!usart_is_tx_ready(USART_COM)) {
+				vTaskDelay(10 / portTICK_PERIOD_MS);
+			}
+			usart_write(USART_COM, to_send);
+			
+			// envia fim de pacote
+			while(!usart_is_tx_ready(USART_COM)) {
+				vTaskDelay(10 / portTICK_PERIOD_MS);
+			}
+			usart_write(USART_COM, eof);
+		}
+	}
 }
 
 static void task_adc(void *pvParameters) {
@@ -535,107 +580,84 @@ static void task_adc(void *pvParameters) {
   // variável para recever dados da fila
   int delta_volume;
   while (1) {
-    if (xQueueReceive(xQueueADC, &(delta_volume), 1000)) {
-		unsigned char byte = (unsigned char) (delta_volume & 0xFF); // conversão de inteiro para byte
-		usart_write(USART_COM,byte);
-      //printf("ADC: %d \n", volume);
-    } else {
-      printf("Nao chegou um novo dado em 1 segundo\n");
+    if (xQueueReceive(xQueueADC, &(delta_volume), 100)) {
+		//int abs_volume = integrate_volume + 16;
+		unsigned char byte = (unsigned char) (integrate_volume & 0xFF); // conversão de inteiro para byte
+		// envia fim de pacote
+ 		while(!usart_is_tx_ready(USART_COM)) {
+ 			vTaskDelay(10 / portTICK_PERIOD_MS);
+ 		}
+		usart_write(USART_COM,'V');
+		
+		
+ 		while(!usart_is_tx_ready(USART_COM)) {
+ 			vTaskDelay(10 / portTICK_PERIOD_MS);
+ 		}
+		 usart_write(USART_COM, byte);
+		 
+		 while(!usart_is_tx_ready(USART_COM)) {
+			 vTaskDelay(10 / portTICK_PERIOD_MS);
+		 }
+		 usart_write(USART_COM, 'X');
+         //printf("ADC: %d \n", byte);
+// 		printf("Integrate volume: %d \n", integrate_volume);
     }
   }
 }
 
 
 void task_bluetooth(void) {
+	#ifndef DEBUG_SERIAL
 	config_usart0();
+	#endif
 	hc05_init();
 	// configura LEDs e Botões
 	io_init();
+	// Handshake
+	//Send Hello and check OK
+	char rx = 'R';
+	while (rx != 'O') {
+		while(!usart_is_tx_ready(USART_COM))
+		vTaskDelay(10 / portTICK_PERIOD_MS);
+		usart_write(USART_COM, 'H');
+		while(!usart_is_rx_ready(USART_COM))
+		vTaskDelay(10 / portTICK_PERIOD_MS);
+		usart_read(USART_COM, &rx);
+	}
+	// Send Start
+	while(!usart_is_tx_ready(USART_COM))
+	vTaskDelay(10 / portTICK_PERIOD_MS);
+	usart_write(USART_COM, 'S');
 
-	char buttonA = '0';
-	char buttonB = '2';
-	char buttonC = '4';
-	char eof = 'X';
-
+			
+	
 	// Task não deve retornar.
 	while(1) {
 		// botao A
 		// BACK
-		
 		if(xSemaphoreTake(xSemaphoreBack, 1)) {
-			buttonA = '1';
+			BaseType_t xHigherPriorityTaskWoken = pdTRUE;
+			int buttA = 1;
+			xQueueSendFromISR(xQueueGeneral, &(buttA), &xHigherPriorityTaskWoken);
 		} 
-		else {
-			buttonA = '0';
-		}
 
-		// envia status botão
-		while(!usart_is_tx_ready(USART_COM)) {
-			vTaskDelay(10 / portTICK_PERIOD_MS);
-		}
-		usart_write(USART_COM, buttonA);
-		
-		// envia fim de pacote
-		while(!usart_is_tx_ready(USART_COM)) {
-			vTaskDelay(10 / portTICK_PERIOD_MS);
-		}
-		usart_write(USART_COM, eof);
-		
 		// botao B
 		// PAUSE
 		if(xSemaphoreTake(xSemaphorePause, 1)) {
-			buttonB = '3';
-		}
-		else {
-			buttonB = '2';
+			BaseType_t xHigherPriorityTaskWoken = pdTRUE;
+			int buttB = 3;
+			xQueueSendFromISR(xQueueGeneral, &(buttB), &xHigherPriorityTaskWoken);
 		}
 
-		while(!usart_is_tx_ready(USART_COM)) {
-			vTaskDelay(10 / portTICK_PERIOD_MS);
-		}
-		usart_write(USART_COM, buttonB);
-	
-		// envia fim de pacote
-		while(!usart_is_tx_ready(USART_COM)) {
-			vTaskDelay(10 / portTICK_PERIOD_MS);
-		}
-		usart_write(USART_COM, eof);
-		
-		
 		// botao C
 		// NEXT
 		if(xSemaphoreTake(xSemaphoreNext, 1)) {
-			buttonC = '5';
-		}
-		else {
-			buttonC = '4';
+			BaseType_t xHigherPriorityTaskWoken = pdTRUE;
+			int buttC = 5;
+			xQueueSendFromISR(xQueueGeneral, &(buttC), &xHigherPriorityTaskWoken);
 		}
 		
-		
-		
-// 		if (xSemaphoreTake(xSemaphoreBack, 1)){
-// 			printf("Back\n");
-// 		}
-// 		
-// 		if (xSemaphoreTake(xSemaphorePause, 1)){
-// 			printf("Pause\n");
-// 		}
-// 		
-// 		if (xSemaphoreTake(xSemaphoreNext, 1)){
-// 			printf("Next\n");
-// 		}
-
-		while(!usart_is_tx_ready(USART_COM)) {
-			vTaskDelay(10 / portTICK_PERIOD_MS);
-		}
-		usart_write(USART_COM, buttonC);
-		
-		// envia fim de pacote
-		while(!usart_is_tx_ready(USART_COM)) {
-			vTaskDelay(10 / portTICK_PERIOD_MS);
-		}
-		usart_write(USART_COM, eof);
-		// dorme por 500 ms
+		// dorme por 150 ms
 		vTaskDelay(150 / portTICK_PERIOD_MS);
 	}
 }
@@ -738,9 +760,13 @@ int main(void) {
 	init_all();
 	
 	
-	xQueueADC = xQueueCreate(100, sizeof(int));
+	xQueueADC = xQueueCreate(1000, sizeof(int));
 	if (xQueueADC == NULL)
 	printf("falha em criar a queue xQueueADC \n");
+	
+ 	xQueueGeneral = xQueueCreate(1000, sizeof(int));
+ 	if (xQueueGeneral == NULL)
+ 	printf("falha em criar a queue xQueueADC \n");
 	
 	/* Attempt to create a semaphore. */
 	xSemaphoreNext = xSemaphoreCreateBinary();
@@ -772,6 +798,11 @@ int main(void) {
 
 	
 	xTaskCreate(task_adc, "BLT", TASK_BLUETOOTH_STACK_SIZE, NULL,	TASK_BLUETOOTH_STACK_PRIORITY, NULL);
+	
+	xTaskCreate(task_general, "BLT", TASK_BLUETOOTH_STACK_SIZE, NULL,	TASK_BLUETOOTH_STACK_PRIORITY, NULL);
+	
+	//xTaskCreate(task_feedback, "BLT", TASK_BLUETOOTH_STACK_SIZE, NULL,	TASK_BLUETOOTH_STACK_PRIORITY, NULL);
+	
 
 	/* Start the scheduler. */
 	vTaskStartScheduler();

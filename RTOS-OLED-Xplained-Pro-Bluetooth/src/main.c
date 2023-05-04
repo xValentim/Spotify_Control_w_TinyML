@@ -15,7 +15,7 @@
 #define PIO_PA24A_UTXD0_MASK (1 << PIO_PA24A_UTXD0)
 
 
-//#define DEBUG_SERIAL
+#define DEBUG_SERIAL
 
 #ifdef DEBUG_SERIAL
 #define USART_COM USART1
@@ -223,7 +223,7 @@ int hc05_init(void) {
   vTaskDelay( 500 / portTICK_PERIOD_MS);
   usart_send_command(USART_COM, buffer_rx, 1000, "AT", 100);
   vTaskDelay( 500 / portTICK_PERIOD_MS);
-  usart_send_command(USART_COM, buffer_rx, 1000, "AT+NAMESmartcontrol", 100);
+  usart_send_command(USART_COM, buffer_rx, 1000, "AT+NAMEhudson", 100);
   vTaskDelay( 500 / portTICK_PERIOD_MS);
   usart_send_command(USART_COM, buffer_rx, 1000, "AT", 100);
   vTaskDelay( 500 / portTICK_PERIOD_MS);
