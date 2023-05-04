@@ -14,9 +14,6 @@
 /* defines                                                              */
 /************************************************************************/
 
-#define TS 16000 // Hz
-#define DURATION 1 //s
-#define SOUND_LEN TS*DURATION
  
 #define PIO_PA2A_URXD0  2
 #define PIO_PA2A_URXD0_MASK (1 << PIO_PA2A_URXD0)
@@ -93,10 +90,6 @@
 #define USART_COM_ID ID_USART0
 #endif
 
-/* AFEC */
-#define AFEC_POT AFEC0
-#define AFEC_POT_ID ID_AFEC0
-#define AFEC_POT_CHANNEL 0 // Canal do pino PD30
 
 /************************************************************************/
 /* RTOS                                                                 */
@@ -161,34 +154,18 @@ extern void vApplicationMallocFailedHook(void) {
 	configASSERT( ( volatile void * ) NULL );
 }
 
-SemaphoreHandle_t xSemaphore;
-SemaphoreHandle_t xSemaphoreGetAudio;
 SemaphoreHandle_t xSemaphoreNext;
 SemaphoreHandle_t xSemaphoreBack;
 SemaphoreHandle_t xSemaphorePause;
 
-volatile uint32_t g_sdram_cnt = 0 ;
-uint32_t *g_sdram = (uint32_t *)BOARD_SDRAM_ADDR;
-volatile char but_flag = 0;
-volatile char command_flag = 0;
 
 /************************************************************************/
 /* handlers / callbacks                                                 */
 /************************************************************************/
 
-void but_callback(void) {
-	// callback button/gate
-	
-	if(but_flag == 0) but_flag = 1;
-}
 
-static void get_audio_callback(void) {
-	//BaseType_t xHigherPriorityTaskWoken = pdTRUE;
-	
-	but_flag = 1;
-	//xSemaphoreGiveFromISR(xSemaphoreGetAudio, &xHigherPriorityTaskWoken);
-// 	afec_channel_enable(AFEC_POT, AFEC_POT_CHANNEL);
-// 	afec_enable_interrupt(AFEC_POT, AFEC_POT_CHANNEL);
+void but_callback(void){
+	int i = 1;
 }
 
 static void next_callback(void) {
@@ -219,27 +196,7 @@ void TC0_Handler(void){
 	UNUSED(ul_dummy);
 
 }
-int volatile flag_null = 0;
-static void AFEC_pot_Callback(void){
-	printf("ox");
-	if(but_flag == 1) {
-		//printf("ox");
-		//afec_enable_interrupt(AFEC_POT, AFEC_POT_CHANNEL);
-		if(g_sdram_cnt < SOUND_LEN){
-			// enquanto não coletar todas as samples, continua fazendo append na sdram
-			
-			g_sdram[g_sdram_cnt] = afec_channel_get_value(AFEC_POT, AFEC_POT_CHANNEL) * 8;
-			g_sdram_cnt++;
-			} else {
-			// disabilita afec, aciona semafaro e zera a contagem do sdram
-			
-			afec_disable_interrupt(AFEC_POT, AFEC_POT_CHANNEL);
-			xSemaphoreGiveFromISR(xSemaphore, 0);
-			g_sdram_cnt = 0;
-		}
-	}
-	//afec_disable_interrupt(AFEC_POT, AFEC_POT_CHANNEL);
-}
+
 
 /************************************************************************/
 /* funcoes                                                              */
@@ -423,30 +380,7 @@ int hc05_init(void) {
 /* TASKS                                                                */
 /************************************************************************/
 
-void task_adc(void){
-	while(1){
-		if( xSemaphoreTake(xSemaphore, 500 / portTICK_PERIOD_MS) == pdTRUE ){
-			// o A inicia a transmissão dos dados pro Python
-			
-			printf("A\n");
-			
-			// congela o RTOS até que todos os dados sejam transmitidos
-			taskENTER_CRITICAL();
-			for(uint32_t i =0; i< SOUND_LEN; i++) {
-				printf("%d\n", *(g_sdram + i));
-			}
-			taskEXIT_CRITICAL();
-			printf("X\n");
-			vTaskDelay(500 / portTICK_PERIOD_MS);
-			but_flag = 0;
-			command_flag = 1;
-			
-			// habilita novamente o AFEC
-			afec_enable_interrupt(AFEC_POT, AFEC_POT_CHANNEL);
-			
-		}
-	}
-}
+
 
 void task_bluetooth(void) {
 	printf("Task Bluetooth started \n");
@@ -517,9 +451,7 @@ void task_bluetooth(void) {
 			buttonC = '4';
 		}
 		
-		if (xSemaphoreTake(xSemaphoreGetAudio, 1)){
-			printf("Manda o trem\n");
-		}
+		
 		
 // 		if (xSemaphoreTake(xSemaphoreBack, 1)){
 // 			printf("Back\n");
@@ -611,120 +543,15 @@ void CAM_pins_init(void){
 
 
 
-static void config_AFEC_pot(Afec *afec, uint32_t afec_id, uint32_t afec_channel, afec_callback_t callback){
-	/*************************************
-	* Ativa e configura AFEC
-	*************************************/
-	/* Ativa AFEC - 0 */
-	afec_enable(afec);
-
-	/* struct de configuracao do AFEC */
-	struct afec_config afec_cfg;
-
-	/* Carrega parametros padrao */
-	afec_get_config_defaults(&afec_cfg);
-
-	/* Configura AFEC */
-	afec_init(afec, &afec_cfg);
-
-	/* Configura trigger por software */
-	afec_set_trigger(AFEC0, AFEC_TRIG_TIO_CH_0);
-	AFEC0->AFEC_MR |= 3;
-
-	/*** Configuracao específica do canal AFEC ***/
-	struct afec_ch_config afec_ch_cfg;
-	afec_ch_get_config_defaults(&afec_ch_cfg);
-	afec_ch_cfg.gain = AFEC_GAINVALUE_0;
-	afec_ch_set_config(afec, afec_channel, &afec_ch_cfg);
-
-	/*
-	* Calibracao:
-	* Because the internal ADC offset is 0x200, it should cancel it and shift
-	down to 0.
-	*/
-	afec_channel_set_analog_offset(afec, afec_channel, 0x200);
-
-	/***  Configura sensor de temperatura ***/
-	struct afec_temp_sensor_config afec_temp_sensor_cfg;
-
-	afec_temp_sensor_get_config_defaults(&afec_temp_sensor_cfg);
-	afec_temp_sensor_set_config(afec, &afec_temp_sensor_cfg);
-	
-	/* configura IRQ */
-	afec_set_callback(afec, afec_channel,	callback, 1);
-	NVIC_SetPriority(afec_id, 4);
-	NVIC_EnableIRQ(afec_id);
-}
-
-// void TC_init(Tc * TC, int ID_TC, int TC_CHANNEL, int freq) {
-// 	uint32_t ul_div;
-// 	uint32_t ul_tcclks;
-// 	uint32_t ul_sysclk = sysclk_get_cpu_hz();
-// 
-// 	pmc_enable_periph_clk(ID_TC);
-// 
-// 	/** Configura o TC para operar em  4Mhz e interrup?c?o no RC compare */
-// 	tc_find_mck_divisor(freq, ul_sysclk, &ul_div, &ul_tcclks, ul_sysclk);
-// 	
-// 	//PMC->PMC_SCER = 1 << 14;
-// 	ul_tcclks = 1;
-// 	
-// 	tc_init(TC, TC_CHANNEL, ul_tcclks
-// 	| TC_CMR_WAVE /* Waveform mode is enabled */
-// 	| TC_CMR_ACPA_SET /* RA Compare Effect: set */
-// 	| TC_CMR_ACPC_CLEAR /* RC Compare Effect: clear */
-// 	| TC_CMR_CPCTRG /* UP mode with automatic trigger on RC Compare */
-// 	);
-// 	
-// 	tc_write_rc(TC, TC_CHANNEL, (ul_sysclk / ul_div) / freq /8 );
-// 	tc_write_ra(TC, TC_CHANNEL, (ul_sysclk / ul_div) / freq / 8 / 2);
-// 
-// 	tc_start(TC, TC_CHANNEL);
-// }
 
 
-static void init_AFEC_SDRAM(void) {
+static void init_all(void) {
 
 	sysclk_init();
 	board_init();
 	configure_console();
+	
 	CAM_pins_init();
-	
-	/* inicializa e configura adc */
-	config_AFEC_pot(AFEC_POT, AFEC_POT_ID, AFEC_POT_CHANNEL, AFEC_pot_Callback);
-
-	/* Selecina canal e inicializa conversão */
-	afec_channel_enable(AFEC_POT, AFEC_POT_CHANNEL);
-	
-	int ID_TC = ID_TC0;
-	int TC_CHANNEL = 0;
-	int freq = TS;
-	
-	uint32_t ul_div;
-	uint32_t ul_tcclks;
-	uint32_t ul_sysclk = sysclk_get_cpu_hz();
-
-	pmc_enable_periph_clk(ID_TC);
-
-	/** Configura o TC para operar em  4Mhz e interrup?c?o no RC compare */
-	tc_find_mck_divisor(freq, ul_sysclk, &ul_div, &ul_tcclks, ul_sysclk);
-	
-	//PMC->PMC_SCER = 1 << 14;
-	ul_tcclks = 1;
-	
-	tc_init(TC0, TC_CHANNEL, ul_tcclks
-	| TC_CMR_WAVE /* Waveform mode is enabled */
-	| TC_CMR_ACPA_SET /* RA Compare Effect: set */
-	| TC_CMR_ACPC_CLEAR /* RC Compare Effect: clear */
-	| TC_CMR_CPCTRG /* UP mode with automatic trigger on RC Compare */
-	);
-	
-	tc_write_rc(TC0, TC_CHANNEL, (ul_sysclk / ul_div) / freq /8 );
-	tc_write_ra(TC0, TC_CHANNEL, (ul_sysclk / ul_div) / freq / 8 / 2);
-
-	tc_start(TC0, TC_CHANNEL);
-	// ----------------------------------
-	
 	
 	/* Inicializa o button/gate */
 	NVIC_EnableIRQ(BUT_PIO_ID);
@@ -736,18 +563,7 @@ static void init_AFEC_SDRAM(void) {
 	pio_enable_interrupt(BUT_PIO, BUT_PIO_PIN_MASK);
 	pio_handler_set(BUT_PIO, BUT_PIO_ID, BUT_PIO_PIN_MASK, ACTIVATE_IN , but_callback);
 	
-	/* Inicializa o LED */
-// 	pmc_enable_periph_clk(LED_ID);
-// 	pio_configure(LED, PIO_OUTPUT_0, LED_IDX_MASK, PIO_DEFAULT);
-// 	pio_set(LED, LED_IDX_MASK);
-	
-	xSemaphore = xSemaphoreCreateBinary();
-	
-	/* Complete SDRAM configuration */
-	pmc_enable_periph_clk(ID_SDRAMC);
-	sdramc_init((sdramc_memory_dev_t *)&SDRAM_ISSI_IS42S16100E,	sysclk_get_cpu_hz());
-	sdram_enable_unaligned_support();
-	SCB_CleanInvalidateDCache();
+
 }
 
 /************************************************************************/
@@ -758,15 +574,8 @@ int main(void) {
 	/* Initialize the SAM system */
 	printf("oi");
 	
-	init_AFEC_SDRAM();
+	init_all();
 	
-	//TC_init(TC0, ID_TC0, 0, TS);
-	//Tc *TC = TC0;
-	
-	/* Attempt to create a semaphore. */
-	xSemaphoreGetAudio = xSemaphoreCreateBinary();
-	if (xSemaphoreGetAudio == NULL)
-	printf("falha em criar o semaforo \n");
 	
 	/* Attempt to create a semaphore. */
 	xSemaphoreNext = xSemaphoreCreateBinary();
@@ -784,9 +593,9 @@ int main(void) {
 	if (xSemaphorePause == NULL)
 	printf("falha em criar o semaforo \n");
 	
-	if (xTaskCreate(task_adc, "adc", TASK_LCD_STACK_SIZE, NULL, TASK_LCD_STACK_PRIORITY, NULL) != pdPASS) {
-		printf("Failed to create adc task\r\n");
-	}
+// 	if (xTaskCreate(task_adc, "adc", TASK_LCD_STACK_SIZE, NULL, TASK_LCD_STACK_PRIORITY, NULL) != pdPASS) {
+// 		printf("Failed to create adc task\r\n");
+// 	}
 
 	/* Create task to make led blink */
 	xTaskCreate(task_bluetooth, "BLT", TASK_BLUETOOTH_STACK_SIZE, NULL,	TASK_BLUETOOTH_STACK_PRIORITY, NULL);
