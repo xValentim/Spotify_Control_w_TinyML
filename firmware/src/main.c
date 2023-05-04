@@ -9,7 +9,7 @@
 #include "conf_board.h"
 #include <string.h>
 #include <stdlib.h>
-
+#include <stdio.h>
 /************************************************************************/
 /* defines                                                              */
 /************************************************************************/
@@ -90,10 +90,15 @@
 #define USART_COM_ID ID_USART0
 #endif
 
+#define AFEC_POT AFEC0
+#define AFEC_POT_ID ID_AFEC0
+#define AFEC_POT_CHANNEL 0 // Canal do pino PD30
 
 /************************************************************************/
 /* RTOS                                                                 */
 /************************************************************************/
+TimerHandle_t xTimer;
+
 
 /* TASKS  */
 #define TASK_LCD_STACK_SIZE					  (1024/sizeof(portSTACK_TYPE))
@@ -111,6 +116,8 @@ extern void vApplicationIdleHook(void);
 extern void vApplicationTickHook(void);
 extern void vApplicationMallocFailedHook(void);
 extern void xPortSysTickHandler(void);
+static void config_AFEC_pot(Afec *afec, uint32_t afec_id, uint32_t afec_channel,
+afec_callback_t callback);
 
 /************************************************************************/
 /* constants                                                            */
@@ -153,11 +160,16 @@ extern void vApplicationMallocFailedHook(void) {
 	/* Force an assert. */
 	configASSERT( ( volatile void * ) NULL );
 }
-
+volatile int volume;
+int volatile old_volume = 0;
 SemaphoreHandle_t xSemaphoreNext;
 SemaphoreHandle_t xSemaphoreBack;
 SemaphoreHandle_t xSemaphorePause;
+SemaphoreHandle_t xSemaphoreVolume;
 
+
+/** Queue for msg log send data */
+QueueHandle_t xQueueADC;
 
 /************************************************************************/
 /* handlers / callbacks                                                 */
@@ -198,9 +210,121 @@ void TC0_Handler(void){
 }
 
 
+static void AFEC_pot_callback(void) {
+	int delta_volume;
+	int value = afec_channel_get_value(AFEC_POT, AFEC_POT_CHANNEL);
+	if(value < 256){
+		volume = 1;
+	}
+	else if(value < 512){
+		volume = 2;
+	}
+	else if(value < 768){
+		volume = 3;
+	}
+	else if(value < 1024){
+		volume = 4;
+	}
+	else if(value < 1280){
+		volume = 5;
+	}
+	else if(value < 1536){
+		volume = 6;
+	}
+	else if(value < 1796){
+		volume = 7;
+	}
+	else if(value < 2048){
+		volume = 8;
+	}
+	else if(value < 2304){
+		volume = 9;
+	}
+	else if(value < 2560){
+		volume = 10;
+	}
+	else if(value < 2816){
+		volume = 11;
+	}
+	else if(value < 3072){
+		volume = 12;
+	}
+	else if(value < 3328){
+		volume = 13;
+	}
+	else if(value < 3584){
+		volume = 14;
+	}
+	else if(value < 3840){
+		volume = 15;
+	}
+	else if(value < 4096){
+		volume = 16;
+	}
+	
+	delta_volume = (volume - old_volume) + 16;
+	
+	if (delta_volume != 16){
+		
+		old_volume = volume;
+		BaseType_t xHigherPriorityTaskWoken = pdTRUE;
+		xQueueSendFromISR(xQueueADC, &delta_volume, &xHigherPriorityTaskWoken);
+	}
+}
+
+
 /************************************************************************/
 /* funcoes                                                              */
 /************************************************************************/
+/**
+ * \brief Configure the console UART.
+ */
+
+
+static void config_AFEC_pot(Afec *afec, uint32_t afec_id, uint32_t afec_channel,
+                            afec_callback_t callback) {
+  /*************************************
+   * Ativa e configura AFEC
+   *************************************/
+  /* Ativa AFEC - 0 */
+  afec_enable(afec);
+
+  /* struct de configuracao do AFEC */
+  struct afec_config afec_cfg;
+
+  /* Carrega parametros padrao */
+  afec_get_config_defaults(&afec_cfg);
+
+  /* Configura AFEC */
+  afec_init(afec, &afec_cfg);
+
+  /* Configura trigger por software */
+  afec_set_trigger(afec, AFEC_TRIG_SW);
+
+  /*** Configuracao específica do canal AFEC ***/
+  struct afec_ch_config afec_ch_cfg;
+  afec_ch_get_config_defaults(&afec_ch_cfg);
+  afec_ch_cfg.gain = AFEC_GAINVALUE_0;
+  afec_ch_set_config(afec, afec_channel, &afec_ch_cfg);
+
+  /*
+  * Calibracao:
+  * Because the internal ADC offset is 0x200, it should cancel it and shift
+  down to 0.
+  */
+  afec_channel_set_analog_offset(afec, afec_channel, 0x200);
+
+  /***  Configura sensor de temperatura ***/
+  struct afec_temp_sensor_config afec_temp_sensor_cfg;
+
+  afec_temp_sensor_get_config_defaults(&afec_temp_sensor_cfg);
+  afec_temp_sensor_set_config(afec, &afec_temp_sensor_cfg);
+
+  /* configura IRQ */
+  afec_set_callback(afec, afec_channel, callback, 1);
+  NVIC_SetPriority(afec_id, 4);
+  NVIC_EnableIRQ(afec_id);
+}
 
 void io_init(void) {
 
@@ -380,15 +504,51 @@ int hc05_init(void) {
 /* TASKS                                                                */
 /************************************************************************/
 
+void vTimerCallback(TimerHandle_t xTimer) {
+	/* Selecina canal e inicializa conversão */
+	afec_channel_enable(AFEC_POT, AFEC_POT_CHANNEL);
+	afec_start_software_conversion(AFEC_POT);
+}
+
+static void task_adc(void *pvParameters) {
+
+  // configura ADC e TC para controlar a leitura
+  config_AFEC_pot(AFEC_POT, AFEC_POT_ID, AFEC_POT_CHANNEL, AFEC_pot_callback);
+
+  xTimer = xTimerCreate(/* Just a text name, not used by the RTOS
+                        kernel. */
+                        "Timer",
+                        /* The timer period in ticks, must be
+                        greater than 0. */
+                        100,
+                        /* The timers will auto-reload themselves
+                        when they expire. */
+                        pdTRUE,
+                        /* The ID is used to store a count of the
+                        number of times the timer has expired, which
+                        is initialised to 0. */
+                        (void *)0,
+                        /* Timer callback */
+                        vTimerCallback);
+  xTimerStart(xTimer, 0);
+
+  // variável para recever dados da fila
+  int delta_volume;
+  while (1) {
+    if (xQueueReceive(xQueueADC, &(delta_volume), 1000)) {
+		unsigned char byte = (unsigned char) (delta_volume & 0xFF); // conversão de inteiro para byte
+		usart_write(USART_COM,byte);
+      //printf("ADC: %d \n", volume);
+    } else {
+      printf("Nao chegou um novo dado em 1 segundo\n");
+    }
+  }
+}
 
 
 void task_bluetooth(void) {
-	printf("Task Bluetooth started \n");
-	
-	printf("Inicializando HC05 \n");
 	config_usart0();
 	hc05_init();
-
 	// configura LEDs e Botões
 	io_init();
 
@@ -479,6 +639,7 @@ void task_bluetooth(void) {
 		vTaskDelay(150 / portTICK_PERIOD_MS);
 	}
 }
+
 
 void CAM_pins_init(void){
 	// Ativa PIOs
@@ -577,6 +738,10 @@ int main(void) {
 	init_all();
 	
 	
+	xQueueADC = xQueueCreate(100, sizeof(int));
+	if (xQueueADC == NULL)
+	printf("falha em criar a queue xQueueADC \n");
+	
 	/* Attempt to create a semaphore. */
 	xSemaphoreNext = xSemaphoreCreateBinary();
 	if (xSemaphoreNext == NULL)
@@ -593,12 +758,20 @@ int main(void) {
 	if (xSemaphorePause == NULL)
 	printf("falha em criar o semaforo \n");
 	
+	/* Attempt to create a semaphore. */
+	xSemaphoreVolume = xSemaphoreCreateBinary();
+	if (xSemaphoreVolume == NULL)
+	printf("falha em criar o semaforo \n");
+	
 // 	if (xTaskCreate(task_adc, "adc", TASK_LCD_STACK_SIZE, NULL, TASK_LCD_STACK_PRIORITY, NULL) != pdPASS) {
 // 		printf("Failed to create adc task\r\n");
 // 	}
 
 	/* Create task to make led blink */
 	xTaskCreate(task_bluetooth, "BLT", TASK_BLUETOOTH_STACK_SIZE, NULL,	TASK_BLUETOOTH_STACK_PRIORITY, NULL);
+
+	
+	xTaskCreate(task_adc, "BLT", TASK_BLUETOOTH_STACK_SIZE, NULL,	TASK_BLUETOOTH_STACK_PRIORITY, NULL);
 
 	/* Start the scheduler. */
 	vTaskStartScheduler();
